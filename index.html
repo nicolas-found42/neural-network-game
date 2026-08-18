@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neuroevolution Asteroids</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #05070c; color: #cfd6e4;
+    font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #stage { flex: 1; display: flex; gap: 10px; padding: 10px; min-height: 0; }
+  #arenaWrap { flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  #arenaBox { position: relative; }
+  #arena { display: block; background: #0b0e14; border: 1px solid #1c2436; border-radius: 4px; }
+  #hud {
+    position: absolute; top: 12px; left: 14px;
+    color: #e8ecf4; text-shadow: 0 1px 3px #000; pointer-events: none; white-space: pre;
+  }
+  #side { width: 302px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  #chart, #net { background: #0e1320; border: 1px solid #1c2436; border-radius: 4px; }
+  #controls {
+    display: flex; gap: 8px; align-items: center; padding: 8px 14px;
+    background: #0e1320; border-top: 1px solid #1c2436;
+  }
+  #controls button {
+    font: inherit; color: #cfd6e4; background: #1a2233;
+    border: 1px solid #2a3550; border-radius: 4px; padding: 4px 12px; cursor: pointer;
+  }
+  #controls button:hover { background: #232e46; }
+  #controls button.active { background: #39d0ff; border-color: #39d0ff; color: #05070c; }
+  #speedBox { display: flex; flex-direction: column; gap: 2px; flex: 1; max-width: 420px; }
+  #speedRow { display: flex; align-items: center; gap: 10px; }
+  #speedSlider { flex: 1; accent-color: #39d0ff; cursor: pointer; }
+  #speedValue { min-width: 56px; text-align: right; color: #39d0ff; font-weight: bold; }
+  #speedEff { min-width: 150px; color: #7f8ba3; font-size: 11px; }
+  #speedTicks {
+    display: flex; justify-content: space-between; color: #7f8ba3;
+    font-size: 10px; padding: 0 2px; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="arenaWrap">
+    <div id="arenaBox">
+      <canvas id="arena" width="960" height="600"></canvas>
+      <div id="hud"></div>
+    </div>
+  </div>
+  <div id="side">
+    <canvas id="chart" width="300" height="110"></canvas>
+    <canvas id="net" width="280" height="420"></canvas>
+  </div>
+</div>
+<div id="controls">
+  <button id="btnPause">Pause</button>
+  <div id="speedBox">
+    <div id="speedRow">
+      <input id="speedSlider" type="range" min="0" max="4" step="0.01" value="0">
+      <span id="speedValue">&times;1</span>
+      <span id="speedEff"></span>
+    </div>
+    <div id="speedTicks"><span>1&times;</span><span>10&times;</span><span>100&times;</span><span>1000&times;</span><span>10000&times;</span></div>
+  </div>
+  <button id="btnRays">Rays</button>
+  <button id="btnRestart">&#8635; Restart</button>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

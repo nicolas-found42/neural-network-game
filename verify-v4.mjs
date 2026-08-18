@@ -1,0 +1,189 @@
+// Fresh-process verification harness for v4 (solo eval + Space Hammer steals).
+const { CONFIG } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/config.js');
+const { World } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/game.js');
+const { Genome, Network, resetInnovation } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/neat.js');
+const { Population } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+
+let pass = 0, fail = 0;
+const ok = (name, cond, detail = '') => {
+  if (cond) { pass++; console.log(`  ok  ${name}`); }
+  else { fail++; console.log(`FAIL  ${name} ${detail}`); }
+};
+const dt = CONFIG.dt;
+
+// 1. Config shape.
+ok('inputs=21', CONFIG.nn.inputs === 21);
+ok('outputIds 21-25', JSON.stringify(CONFIG.nn.outputIds) === '[21,22,23,24,25]');
+ok('firstHiddenNodeId=26', CONFIG.nn.firstHiddenNodeId === 26);
+ok('wave constants', CONFIG.world.waveTimeLimit === 60 && CONFIG.world.episodeHardCap === 300 && CONFIG.asteroid.waveGrowth === 1.25);
+ok('speed 1..10000, cap 20000, budget 20ms', CONFIG.render.speedMin === 1 && CONFIG.render.speedMax === 10000 && CONFIG.render.maxStepsPerFrame === 20000 && CONFIG.render.frameBudgetMs === 20);
+ok('crowd/maintain constants removed', !('crowdRadius' in CONFIG.sensors) && !('maintainCount' in CONFIG.asteroid));
+
+// 2. Population/network shape.
+resetInnovation();
+const pop = new Population(100);
+const out0 = pop.networks[0].activate(new Array(21).fill(0));
+ok('activate returns 5 outputs', Array.isArray(out0) && out0.length === 5 && out0.every(Number.isFinite), JSON.stringify(out0));
+const connCount = pop.genomes[0].connections.size;
+ok('initial connections 21*5=105', connCount === 105, String(connCount));
+
+// Stub brain: captures inputs, returns fixed controls [left,right,thrust,fire,memory].
+let captured = null;
+const stub = { activate: (inp) => { captured = inp.slice(); return [0, 0, 0.9, 0, 0.42]; } };
+const neverFire = { activate: () => [0, 0, 0, 0, 0] };
+
+// 3. Toroidal ray across seam.
+{
+  const w = new World([stub]);
+  const a = w.agents[0];
+  a.x = 950; a.y = 300; a.heading = 0; a.vx = 0; a.vy = 0;
+  w.asteroids = [{ x: 10, y: 300, vx: 0, vy: 0, r: 38, pts: 20, size: 'L', shape: [1], angle: 0, spin: 0 }];
+  w.step(dt);
+  ok('toroidal ray sees across seam (ray0)', captured[0] > 0.9, String(captured[0]));
+  ok('closeness = 1 - 20/500 (center dist)', Math.abs(captured[13] - 0.96) < 1e-9, String(captured[13]));
+  ok('pressure > 0', captured[19] > 0, String(captured[19]));
+  ok('memory fed back (0 first step)', captured[20] === 0, String(captured[20]));
+  ok('thrusting flag set', a.thrusting === true);
+}
+
+// 4. Seam collision kills.
+{
+  const w = new World([neverFire]);
+  const a = w.agents[0];
+  a.x = 10; a.y = 300;
+  w.asteroids = [{ x: CONFIG.arena.width - 5, y: 300, vx: 0, vy: 0, r: 38, pts: 20, size: 'L', shape: [1], angle: 0, spin: 0 }];
+  w.step(dt);
+  ok('seam collision kills ship', a.alive === false);
+}
+
+// 5. Memory loop.
+{
+  const w = new World([stub]);
+  w.step(dt);
+  ok('agent.memory = output 25', Math.abs(w.agents[0].memory - 0.42) < 1e-9, String(w.agents[0].memory));
+  w.step(dt);
+  ok('input 20 = previous memory', Math.abs(captured[20] - 0.42) < 1e-9, String(captured[20]));
+}
+
+// 6. Wave escalation.
+{
+  const w = new World([neverFire]);
+  ok('wave 0 start: 5 rocks', w.asteroids.length === 5 && w.wave === 0);
+  w.asteroids = [];
+  w.step(dt);
+  ok('wave 1 spawns 7 rocks', w.wave === 1 && w.asteroids.length === 7, `${w.wave} ${w.asteroids.length}`);
+  w.asteroids = [];
+  w.step(dt);
+  ok('wave 2 spawns 9 rocks', w.wave === 2 && w.asteroids.length === 9, `${w.wave} ${w.asteroids.length}`);
+  ok('wave clock reset', w.waveTime <= dt * 2, String(w.waveTime));
+}
+
+// 7. Episode ends by wave clock while alive: immobile ship at center, immobile rocks
+// parked at corners (toroidal distance ~552 > hit range, no wave can clear them).
+{
+  const w = new World([neverFire]);
+  const a = w.agents[0];
+  a.x = 480; a.y = 300;
+  const parked = (x, y) => ({ x, y, vx: 0, vy: 0, r: 38, pts: 20, size: 'L', shape: [1], angle: 0, spin: 0 });
+  w.asteroids = [parked(10, 10), parked(950, 10), parked(10, 590), parked(950, 590), parked(480, 10)];
+  let steps = 0;
+  while (!w.done && steps < 4000) { w.step(dt); steps++; }
+  ok('episode ends by 60s wave clock, alive', w.done && w.agents[0].alive && Math.abs(w.waveTime - 60) < dt * 2, `done=${w.done} alive=${w.agents[0].alive} t=${w.waveTime} steps=${steps}`);
+}
+
+// 8. Hard cap overrides wave resets.
+{
+  const w = new World([neverFire]);
+  w.time = 299.9;
+  let steps = 0;
+  while (!w.done && steps < 10) { w.step(dt); steps++; }
+  ok('episode hard cap at 300s', w.done === true && w.time >= 300, `done=${w.done} t=${w.time}`);
+}
+
+// 9. Fire discipline: cooldown + max 4 + recoil.
+{
+  const alwaysFire = { activate: (inp) => { captured = inp.slice(); return [0, 0, 0, 1, 0]; } };
+  const w = new World([alwaysFire]);
+  const a = w.agents[0];
+  a.heading = 0; a.vx = 0; a.vy = 0;
+  for (let i = 0; i < 200; i++) w.step(dt);
+  ok('max 4 bullets alive', a.bulletsOut <= 4, String(a.bulletsOut));
+  ok('recoil pushed ship backward', a.x < 10 || a.vx < 0, `x=${a.x.toFixed(1)} vx=${a.vx.toFixed(1)}`);
+  ok('guns sensor reads bulletsOut/4', Math.abs(captured[15] - a.bulletsOut / 4) < 1e-9, `${captured[15]} vs ${a.bulletsOut / 4}`);
+}
+
+// 10. Solo driver mini-run: 3 brains then evolve; orphans after 5 cycles.
+{
+  resetInnovation();
+  const p2 = new Population(100);
+  const fit = new Array(100).fill(0);
+  for (let b = 0; b < 3; b++) {
+    const w = new World([p2.networks[b]]);
+    let steps = 0;
+    while (!w.done && steps < 4000) { w.step(dt); steps++; }
+    fit[b] = w.agents[0].fitness;
+    ok(`brain ${b} solo episode finite`, Number.isFinite(fit[b]) && w.agents.length === 1, String(fit[b]));
+  }
+  for (let g = 0; g < 5; g++) {
+    const f = Array.from({ length: 100 }, (_, i) => (Math.sin(i * 12.9898 + g * 78.233) * 43758.5453 % 1 + 1) * 500);
+    p2.evolve(f);
+  }
+  ok('generation advanced to 6', p2.generation === 6, String(p2.generation));
+  let orphans = 0;
+  for (const g of p2.genomes) {
+    const ids = new Set(g.nodes.keys());
+    for (const c of g.connections.values()) {
+      if (!ids.has(c.in) || !ids.has(c.out)) orphans++;
+    }
+  }
+  ok('0 orphan connections after 5 evolves', orphans === 0, String(orphans));
+  ok('networks rebuilt with 5 outputs', p2.networks[0].activate(new Array(21).fill(0)).length === 5);
+}
+
+
+// 12. Shaping fitness semantics (v5: movement reward, entropy bonus, novelty archive).
+{
+  const { NoveltyArchive } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+  // Movement reward: full-thrust brain vs immobile corner rocks (no early death).
+  const mover = { activate: () => [0, 0, 0.9, 0, 0] };
+  const wm = new World([mover]);
+  const ship = wm.agents[0];
+  ship.x = 480; ship.y = 300; ship.heading = 0; // east: never approaches any parked rock
+  const parked = (x, y) => ({ x, y, vx: 0, vy: 0, r: 38, pts: 20, size: 'L', shape: [1], angle: 0, spin: 0 });
+  wm.asteroids = [parked(10, 10), parked(950, 10), parked(10, 590), parked(950, 590), parked(480, 10)];
+  for (let i = 0; i < 180; i++) wm.step(dt); // exactly 3s of full thrust
+  const aliveOnly = CONFIG.fitness.alivePerSecond * wm.time;
+  ok('movement reward accrued (>=12% of alive reward)', wm.agents[0].fitness > aliveOnly * 1.12, `${wm.agents[0].fitness.toFixed(0)} vs ${aliveOnly.toFixed(0)}`);
+  ok('stats histogram counts steps', wm.agents[0].stats.steps > 0 && wm.agents[0].stats.thrust === wm.agents[0].stats.steps);
+  const beh = wm.agentBehavior();
+  ok('behavior descriptor has 7 normalized dims', beh.length === 7 && beh.every((v) => v >= 0 && v <= 1.01), JSON.stringify(beh.map((v) => +v.toFixed(2))));
+  let steps = 0;
+  const idle = { activate: () => [0, 0, 0, 0, 0] };
+  const wi = new World([idle]);
+  steps = 0;
+  while (!wi.done && steps < 600) { wi.step(dt); steps++; }
+  ok('mixed actions outscore idle per-second', (wm.agents[0].fitness / wm.time) > (wi.agents[0].fitness / wi.time) + 1,
+    `${(wm.agents[0].fitness / wm.time).toFixed(1)} vs ${(wi.agents[0].fitness / wi.time).toFixed(1)}`);
+  // Novelty archive: identical behavior -> ~0, distinct -> > 0; decay reaches floor.
+  const arch = new NoveltyArchive();
+  ok('empty archive novelty 0', arch.novelty(beh) === 0);
+  arch.add(beh);
+  ok('identical behavior novelty ~0', arch.novelty(beh) < 1e-9);
+  const far = [1, 0, 0, 0, 1, 1, 1];
+  ok('distinct behavior novelty > 0.5', arch.novelty(far) > 0.5, String(arch.novelty(far)));
+  ok('bonus decays to floor by decayGens', Math.abs(arch.bonusFor(CONFIG.fitness.noveltyDecayGens + 1) - CONFIG.fitness.noveltyBonus * CONFIG.fitness.noveltyFloorFrac) < 1e-9,
+    String(arch.bonusFor(CONFIG.fitness.noveltyDecayGens + 1)));
+  ok('bonus full at gen 1', arch.bonusFor(1) > CONFIG.fitness.noveltyBonus * 0.9);
+}
+{
+  const w = new World([stub]);
+  for (let i = 0; i < 600; i++) w.step(dt);
+  const t0 = performance.now();
+  for (let i = 0; i < 20000; i++) w.step(dt);
+  const per = (performance.now() - t0) / 20000;
+  console.log(`  info solo step = ${per.toFixed(5)} ms`);
+  ok('solo step < 0.05ms', per < 0.05, String(per));
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
