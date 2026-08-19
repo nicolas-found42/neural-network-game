@@ -334,3 +334,88 @@ export function renderNetwork(ctx, genome, network) {
   }
   ctx.textAlign = 'left';
 }
+
+// Deep façade: one call per rAF owns canvas, HiDPI, stars, seamCopies, HUD, chart, net.
+// Shallow functions above stay exported for verify / probes; this class is the
+// concentrated interface. Deletion test: deleting it scatters HiDPI + throttling
+// + starfield ownership back to every caller.
+export class ArenaRenderer {
+  constructor({ arena, hud, chart, net } = {}) {
+    this.arena = arena ?? null;
+    this.hud = hud ?? null;
+    this.chart = chart ?? null;
+    this.net = net ?? null;
+    this.ctx = arena ? arena.getContext('2d') : null;
+    this.chartCtx = chart ? chart.getContext('2d') : null;
+    this.netCtx = net ? net.getContext('2d') : null;
+    this.frameCount = 0;
+    this.panelTimer = 0;
+    this.layoutRaf = 0;
+  }
+
+  // Fitted HiDPI layout: arena backing = fitted CSS size * DPR (capped), chart/net fixed.
+  applyHiDPIAndFit() {
+    if (!this.arena || !this.chart || !this.net) return;
+    const wrap = typeof document !== 'undefined' ? document.getElementById('arenaWrap') : null;
+    if (!wrap) return;
+    const scale = Math.min(
+      wrap.clientWidth / CONFIG.arena.width,
+      wrap.clientHeight / CONFIG.arena.height
+    );
+    const cssW = Math.floor(CONFIG.arena.width * scale);
+    const cssH = Math.floor(CONFIG.arena.height * scale);
+    setupHiDPI(this.arena, cssW, cssH, CONFIG.arena.width, CONFIG.arena.height);
+    setupHiDPI(this.chart, CONFIG.render.chart.width, CONFIG.render.chart.height);
+    setupHiDPI(this.net, CONFIG.render.network.width, CONFIG.render.network.height);
+  }
+
+  scheduleLayout() {
+    if (this.layoutRaf) return;
+    this.layoutRaf = requestAnimationFrame(() => {
+      this.layoutRaf = 0;
+      this.applyHiDPIAndFit();
+    });
+  }
+
+  attachListeners() {
+    this.applyHiDPIAndFit();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', () => this.scheduleLayout());
+      if (window.matchMedia) {
+        const watchDPR = () => {
+          const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+          const onChange = () => {
+            this.scheduleLayout();
+            if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+            else if (mq.removeListener) mq.removeListener(onChange);
+            setTimeout(watchDPR, 0);
+          };
+          if (mq.addEventListener) mq.addEventListener('change', onChange);
+          else if (mq.addListener) mq.addListener(onChange);
+        };
+        watchDPR();
+      }
+    }
+  }
+
+  // One call per rAF. Handles arena throttling (>16x every 4th frame) and HUD cadence.
+  // opts: { world, pop, brainIdx, showRays, overlay, info, currentBrain, realDt, speed }
+  frame(opts) {
+    const { world, pop, brainIdx, showRays, overlay, info, currentBrain, realDt, speed } = opts;
+    this.frameCount++;
+    // Arena: throttle software rasterization at high speed.
+    if (this.ctx && world) {
+      if (speed <= 16 || this.frameCount % 4 === 0) {
+        renderArena(this.ctx, world, 0, showRays);
+        if (overlay) renderOverlay(this.ctx, overlay.text);
+      }
+    }
+    this.panelTimer += realDt;
+    if (this.panelTimer >= 1 / CONFIG.render.hudHz) {
+      this.panelTimer = 0;
+      if (this.hud && pop && world) renderHUD(this.hud, pop, world, brainIdx, info);
+      if (this.chartCtx && pop) renderChart(this.chartCtx, pop);
+      if (this.netCtx && currentBrain) renderNetwork(this.netCtx, currentBrain.genome, currentBrain.network);
+    }
+  }
+}

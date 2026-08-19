@@ -1,14 +1,15 @@
 // A/B: same census as before, now with shaping fitness (movement + entropy inside World,
 // novelty added exactly like main.js). Expect: symmetric L/R, thrust up, fire down.
-const { CONFIG } = await import('../js/config.js');
-const { World } = await import('../js/game.js');
-const { resetInnovation } = await import('../js/neat.js');
-const { Population, NoveltyArchive } = await import('../js/population.js');
+import { CONFIG } from '../js/config.js';
+import { World } from '../js/game.js';
+import { InnovationTracker } from '../js/neat.js';
+import { Population, NoveltyArchive } from '../js/population.js';
+import { createRNG, setSeed } from '../js/rng.js';
 
 const TH = CONFIG.nn.actionThreshold;
 const dt = CONFIG.dt;
 
-function runEpisode(pop, i, archive, tally) {
+function runEpisode(pop, i, archive, rng, tally) {
   const net = pop.networks[i];
   const stats = { steps: 0, left: 0, right: 0, thrust: 0, fire: 0 };
   const wrapped = {
@@ -22,7 +23,7 @@ function runEpisode(pop, i, archive, tally) {
       return o;
     },
   };
-  const w = new World([wrapped]);
+  const w = new World([wrapped], { rng });
   let guard = 0;
   while (!w.done && guard < 25000) { w.step(dt); guard++; }
   const behavior = w.agentBehavior();
@@ -46,13 +47,15 @@ function summarize(rows, label) {
   for (const r of top) console.log(`  top: fit ${r.fitness.toFixed(0)} wave ${r.wave} L${r.L} R${r.R} T${r.T} F${r.F}`);
 }
 
-resetInnovation();
-const pop = new Population(100);
-const archive = new NoveltyArchive();
-summarize(Array.from({ length: 40 }, (_, i) => runEpisode(pop, i, archive, true)), 'SHAPED GEN 1');
+setSeed(1);
+const rng = createRNG(1);
+const tracker = new InnovationTracker();
+const pop = new Population(100, { rng, tracker });
+const archive = new NoveltyArchive(rng);
+summarize(Array.from({ length: 40 }, (_, i) => runEpisode(pop, i, archive, rng, true)), 'SHAPED GEN 1');
 
 for (let g = 0; g < 12; g++) {
-  const fits = Array.from({ length: 100 }, (_, i) => runEpisode(pop, i, archive, false));
+  const fits = Array.from({ length: 100 }, (_, i) => runEpisode(pop, i, archive, rng, false));
   pop.evolve(fits);
 }
-summarize(Array.from({ length: 40 }, (_, i) => runEpisode(pop, i, archive, true)), 'SHAPED GEN 13');
+summarize(Array.from({ length: 40 }, (_, i) => runEpisode(pop, i, archive, rng, true)), 'SHAPED GEN 13');

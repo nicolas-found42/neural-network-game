@@ -1,11 +1,10 @@
 // Population lifecycle: speciation, dynamic delta threshold, stagnation culling, reproduction.
 import { CONFIG } from './config.js';
-import { Genome, Network, genomeDistance } from './neat.js';
-import { rng, randInt } from './rng.js';
-
+import { Genome, Network, genomeDistance, InnovationTracker, defaultInnovationTracker } from './neat.js';
+import { defaultRNG } from './rng.js';
+import { NoveltyArchive } from './evaluation.js';
+export { NoveltyArchive };
 const N = CONFIG.neat;
-
-let nextSpeciesId = 1;
 
 // Integer quotas summing exactly to `total`, proportional to weights (largest remainder).
 function largestRemainder(weights, total) {
@@ -27,50 +26,18 @@ function largestRemainder(weights, total) {
   return out;
 }
 
-// Bounded novelty archive over behavior descriptors (arXiv:1902.03142 action-based
-// novelty; decaying bonus per arXiv:2209.03618 adaptive explore/exploit).
-export class NoveltyArchive {
-  constructor() {
-    this.entries = [];
-  }
-
-  // Mean distance to the k nearest archived behaviors; 0 when archive is empty.
-  novelty(behavior) {
-    if (this.entries.length === 0) return 0;
-    const k = Math.min(CONFIG.fitness.noveltyK, this.entries.length);
-    const dists = this.entries.map((e) => {
-      let s = 0;
-      for (let i = 0; i < behavior.length; i++) {
-        const d = behavior[i] - e[i];
-        s += d * d;
-      }
-      return Math.sqrt(s);
-    });
-    dists.sort((a, b) => a - b);
-    let sum = 0;
-    for (let i = 0; i < k; i++) sum += dists[i];
-    return sum / k;
-  }
-
-  add(behavior) {
-    this.entries.push(behavior);
-    if (this.entries.length > CONFIG.fitness.archiveSize) {
-      // Random eviction keeps the archive a time-decaying sample of behaviors.
-      this.entries.splice(randInt(this.entries.length), 1);
-    }
-  }
-
-  // Bonus weight for a given generation: linear decay to a floor fraction.
-  bonusFor(generation) {
-    const F = CONFIG.fitness;
-    const decay = Math.max(F.noveltyFloorFrac, 1 - generation / F.noveltyDecayGens);
-    return F.noveltyBonus * decay;
-  }
-}
 export class Population {
-  constructor(size = N.popSize) {
+  constructor(size = N.popSize, opts = {}) {
+    // opts: { rng, tracker, nextSpeciesIdStart }
+    // When called as new Population(100, rngObj) for compat, treat second arg as rng.
+    if (opts && typeof opts.rng === 'undefined' && typeof opts.rand === 'function') {
+      opts = { rng: opts };
+    }
+    this.rng = opts.rng ?? defaultRNG;
+    this.tracker = opts.tracker ?? new InnovationTracker();
+    this._nextSpeciesId = opts.nextSpeciesIdStart ?? 1;
     this.size = size;
-    this.genomes = Array.from({ length: size }, () => new Genome());
+    this.genomes = Array.from({ length: size }, () => new Genome(this.rng, this.tracker));
     this.networks = this.genomes.map((g) => Network.fromGenome(g));
     this.generation = 1;
     this.history = []; // {best, avg} per generation
@@ -98,7 +65,7 @@ export class Population {
         }
       }
       if (!sp) {
-        sp = { id: nextSpeciesId++, rep: g, bestFitness: -Infinity, stagnation: 0, members: [] };
+        sp = { id: this._nextSpeciesId++, rep: g, bestFitness: -Infinity, stagnation: 0, members: [] };
         this.species.push(sp);
       }
       sp.members.push({ g, f: fitnesses[i] });
@@ -163,14 +130,14 @@ export class Population {
     // --- Safety fill (rounding / degenerate cases), then exact size.
     const pool = this.species.flatMap((s) => s.survivors);
     while (next.length < this.size && pool.length) {
-      next.push(pool[randInt(pool.length)].g.copy());
+      next.push(pool[this.rng.randInt(pool.length)].g.copy());
     }
     next.length = this.size;
 
     // --- Representatives carried over: random member of each producing species.
     this.species = this.species.filter((s, idx) => s.championCopied || quota[idx] > 0);
     for (const s of this.species) {
-      s.rep = s.members[randInt(s.members.length)].g;
+      s.rep = s.members[this.rng.randInt(s.members.length)].g;
     }
 
     this.genomes = next;
@@ -179,23 +146,23 @@ export class Population {
   }
 
   #offspring(s) {
-    const pick = () => s.survivors[randInt(s.survivors.length)];
+    const pick = () => s.survivors[this.rng.randInt(s.survivors.length)];
     let child;
-    if (rng() < N.crossoverRate) {
+    if (this.rng.rng() < N.crossoverRate) {
       const a = pick();
       const b = pick();
       if (a === b) {
         child = a.g.copy();
       } else {
         const aFitter = a.f > b.f ? true : a.f < b.f ? false : null;
-        child = Genome.crossover(a.g, b.g, aFitter);
+        child = Genome.crossover(a.g, b.g, aFitter, this.rng);
       }
     } else {
       child = pick().g.copy();
     }
-    if (rng() < N.addNodeRate) child.mutateAddNode();
-    if (rng() < N.addConnectionRate) child.mutateAddConnection();
-    child.mutateWeights();
+    if (this.rng.rng() < N.addNodeRate) child.mutateAddNode(this.rng, this.tracker);
+    if (this.rng.rng() < N.addConnectionRate) child.mutateAddConnection(this.rng, this.tracker);
+    child.mutateWeights(this.rng);
     return child;
   }
 }

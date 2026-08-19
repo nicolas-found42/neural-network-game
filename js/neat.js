@@ -1,48 +1,76 @@
-// NEAT: genomes, structural/weight mutations, shared innovation tracker, feedforward phenotype.
+// NEAT: genomes, structural/weight mutations, owned innovation tracker, feedforward phenotype.
 import { CONFIG } from './config.js';
-import { rand, randn, rng, randInt } from './rng.js';
+import { rand, randn, rng, randInt, defaultRNG } from './rng.js';
 
 const N = CONFIG.neat;
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-// ---- Innovation tracker: one shared counter; hidden node ids come from the same
-// counter (starting at 16). Persists across generations; reset on Restart.
-let nextId = CONFIG.nn.firstHiddenNodeId;
-const innovOf = new Map(); // "from:to" -> innov
+// ---- Innovation tracker: owned per-Population (deep module seam), with a
+// legacy global singleton for backward compat where no tracker is threaded.
+export class InnovationTracker {
+  constructor(startId = CONFIG.nn.firstHiddenNodeId) {
+    this.nextId = startId;
+    this.innovOf = new Map(); // "from:to" -> innov
+  }
+  getInnovation(from, to) {
+    const key = from + ':' + to;
+    let innov = this.innovOf.get(key);
+    if (innov === undefined) {
+      innov = this.nextId++;
+      this.innovOf.set(key, innov);
+    }
+    return innov;
+  }
+  newNodeId() {
+    return this.nextId++;
+  }
+  reset() {
+    this.nextId = CONFIG.nn.firstHiddenNodeId;
+    this.innovOf.clear();
+  }
+}
+
+// Legacy singleton — kept so existing callers (verify, probes, main) that
+// call getInnovation/newNodeId/resetInnovation without a tracker still work.
+// New code should use Population.tracker or pass a tracker explicitly.
+const defaultTracker = new InnovationTracker();
+export const defaultInnovationTracker = defaultTracker;
 
 export function getInnovation(from, to) {
-  const key = from + ':' + to;
-  let innov = innovOf.get(key);
-  if (innov === undefined) {
-    innov = nextId++;
-    innovOf.set(key, innov);
-  }
-  return innov;
+  return defaultTracker.getInnovation(from, to);
 }
 
 export function newNodeId() {
-  return nextId++;
+  return defaultTracker.newNodeId();
 }
 
 export function resetInnovation() {
-  nextId = CONFIG.nn.firstHiddenNodeId;
-  innovOf.clear();
+  defaultTracker.reset();
+}
+
+function resolveRNG(rngObj) {
+  return rngObj ?? defaultRNG;
+}
+function resolveTracker(tracker) {
+  return tracker ?? defaultTracker;
 }
 
 export class Genome {
-  constructor() {
-    // Initial genome: all 48 input->output connections, random weights, no hidden nodes.
+  constructor(rngObj = null, tracker = null) {
+    const _rng = resolveRNG(rngObj);
+    const _tracker = resolveTracker(tracker);
+    // Initial genome: all 105 input->output connections, random weights, no hidden nodes.
     this.nodes = new Map();
     this.connections = new Map();
     for (let i = 0; i < CONFIG.nn.inputs; i++) this.nodes.set(i, { type: 'input' });
     for (const o of CONFIG.nn.outputIds) this.nodes.set(o, { type: 'output' });
     for (let i = 0; i < CONFIG.nn.inputs; i++) {
       for (const o of CONFIG.nn.outputIds) {
-        this.connections.set(getInnovation(i, o), {
+        this.connections.set(_tracker.getInnovation(i, o), {
           in: i,
           out: o,
-          w: rand(N.weightInitMin, N.weightInitMax),
+          w: _rng.rand(N.weightInitMin, N.weightInitMax),
           enabled: true,
         });
       }
@@ -86,13 +114,14 @@ export class Genome {
     return g;
   }
 
-  mutateWeights() {
+  mutateWeights(rngObj = null) {
+    const _rng = resolveRNG(rngObj);
     for (const c of this.connections.values()) {
-      if (rng() < N.weightPerturbRate) {
-        c.w = clamp(c.w + randn() * N.weightPerturbSigma, N.weightMin, N.weightMax);
+      if (_rng.rng() < N.weightPerturbRate) {
+        c.w = clamp(c.w + _rng.randn() * N.weightPerturbSigma, N.weightMin, N.weightMax);
       }
-      if (rng() < N.weightReplaceRate) {
-        c.w = rand(N.weightReplaceMin, N.weightReplaceMax);
+      if (_rng.rng() < N.weightReplaceRate) {
+        c.w = _rng.rand(N.weightReplaceMin, N.weightReplaceMax);
       }
     }
   }
@@ -113,14 +142,16 @@ export class Genome {
     return false;
   }
 
-  mutateAddConnection() {
+  mutateAddConnection(rngObj = null, tracker = null) {
+    const _rng = resolveRNG(rngObj);
+    const _tracker = resolveTracker(tracker);
     const ids = [...this.nodes.keys()];
     const aPool = ids.filter((id) => this.nodes.get(id).type !== 'output'); // input | hidden
     const bPool = ids.filter((id) => this.nodes.get(id).type !== 'input'); // hidden | output
     if (!aPool.length || !bPool.length) return;
     for (let attempt = 0; attempt < N.addConnectionAttempts; attempt++) {
-      const a = aPool[randInt(aPool.length)];
-      const b = bPool[randInt(bPool.length)];
+      const a = aPool[_rng.randInt(aPool.length)];
+      const b = bPool[_rng.randInt(bPool.length)];
       if (a === b) continue;
       let connected = false;
       for (const c of this.connections.values()) {
@@ -131,29 +162,32 @@ export class Genome {
       }
       if (connected) continue; // pair already present (enabled or disabled)
       if (this.#hasPath(b, a)) continue; // would create a cycle
-      this.connections.set(getInnovation(a, b), {
+      this.connections.set(_tracker.getInnovation(a, b), {
         in: a,
         out: b,
-        w: rand(N.weightInitMin, N.weightInitMax),
+        w: _rng.rand(N.weightInitMin, N.weightInitMax),
         enabled: true,
       });
       return;
     }
   }
 
-  mutateAddNode() {
+  mutateAddNode(rngObj = null, tracker = null) {
+    const _rng = resolveRNG(rngObj);
+    const _tracker = resolveTracker(tracker);
     const enabled = [...this.connections.values()].filter((c) => c.enabled);
     if (!enabled.length) return;
-    const c = enabled[randInt(enabled.length)];
+    const c = enabled[_rng.randInt(enabled.length)];
     c.enabled = false;
-    const id = newNodeId();
+    const id = _tracker.newNodeId();
     this.nodes.set(id, { type: 'hidden' });
-    this.connections.set(getInnovation(c.in, id), { in: c.in, out: id, w: 1, enabled: true });
-    this.connections.set(getInnovation(id, c.out), { in: id, out: c.out, w: c.w, enabled: true });
+    this.connections.set(_tracker.getInnovation(c.in, id), { in: c.in, out: id, w: 1, enabled: true });
+    this.connections.set(_tracker.getInnovation(id, c.out), { in: id, out: c.out, w: c.w, enabled: true });
   }
 
   // aFitter: true = a fitter, false = b fitter, null = equal fitness (take all genes from both).
-  static crossover(a, b, aFitter) {
+  static crossover(a, b, aFitter, rngObj = null) {
+    const _rng = resolveRNG(rngObj);
     const child = Genome.blank();
     // Nodes: fixed input/output set plus every hidden endpoint referenced by a carried
     // gene. Unioning parent node sets would create connection-less orphan nodes.
@@ -173,7 +207,7 @@ export class Genome {
       const cb = b.connections.get(innov);
       if (cb) {
         const pick = equal
-          ? (rng() < 0.5 ? ca : cb)
+          ? (_rng.rng() < 0.5 ? ca : cb)
           : (aFitter ? ca : cb);
         child.connections.set(innov, { ...pick });
       } else if (aFitter === true || equal) {

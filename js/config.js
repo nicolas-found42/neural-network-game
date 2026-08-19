@@ -131,3 +131,10 @@ export const CONFIG = {
     frameBudgetMs: 20,
   },
 };
+
+// Deep freeze: catch stray writes early (typos like CONFIG.sensors.raneg).
+function deepFreeze(o) {
+  Object.freeze(o);
+  for (const v of Object.values(o)) if (v && typeof v === 'object') deepFreeze(v);
+}
+deepFreeze(CONFIG);

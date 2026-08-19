@@ -1,13 +1,14 @@
 // Gemba probe: what do the brains ACTUALLY do? Measures action usage per brain.
-const { CONFIG } = await import('../js/config.js');
-const { World } = await import('../js/game.js');
-const { resetInnovation } = await import('../js/neat.js');
-const { Population } = await import('../js/population.js');
+import { CONFIG } from '../js/config.js';
+import { World } from '../js/game.js';
+import { InnovationTracker } from '../js/neat.js';
+import { Population } from '../js/population.js';
+import { createRNG, setSeed } from '../js/rng.js';
 
 const TH = CONFIG.nn.actionThreshold;
 const dt = CONFIG.dt;
 
-function censusBrains(pop, n) {
+function censusBrains(pop, n, rng) {
   const rows = [];
   for (let i = 0; i < n; i++) {
     const net = pop.networks[i];
@@ -24,7 +25,7 @@ function censusBrains(pop, n) {
         return o;
       },
     };
-    const w = new World([wrapped]);
+    const w = new World([wrapped], { rng });
     let guard = 0;
     while (!w.done && guard < 25000) { w.step(dt); guard++; }
     const pct = (x) => (100 * x / stats.steps).toFixed(0);
@@ -57,19 +58,21 @@ function summarize(rows, label) {
   for (const r of top) console.log(`  brain ${r.brain}: fit ${r.fitness} dur ${r.dur}s wave ${r.wave} L${r.L} R${r.R} T${r.T} F${r.F} out[${r.meanOut}]`);
 }
 
-resetInnovation();
-const pop = new Population(100);
-summarize(censusBrains(pop, 40), 'GEN 1 (random weights)');
+setSeed(1);
+const rng = createRNG(1);
+const tracker = new InnovationTracker();
+const pop = new Population(100, { rng, tracker });
+summarize(censusBrains(pop, 40, rng), 'GEN 1 (random weights)');
 
 // Evolve 12 generations with real solo fitness, then census again.
 for (let g = 0; g < 12; g++) {
   const fits = new Array(100).fill(0);
   for (let i = 0; i < 100; i++) {
-    const w = new World([pop.networks[i]]);
+    const w = new World([pop.networks[i]], { rng });
     let guard = 0;
     while (!w.done && guard < 25000) { w.step(dt); guard++; }
     fits[i] = w.agents[0].fitness;
   }
   pop.evolve(fits);
 }
-summarize(censusBrains(pop, 40), 'GEN 13 (after 12 evolutions)');
+summarize(censusBrains(pop, 40, rng), 'GEN 13 (after 12 evolutions)');

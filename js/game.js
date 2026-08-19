@@ -1,32 +1,31 @@
 // Solo asteroid arena: one World evaluates ONE brain at a time (Space-Hammer-style
 // sequential evaluation). The population driver in main.js feeds brains 0..99 in turn.
 import { CONFIG } from './config.js';
-import { rand } from './rng.js';
+import { defaultRNG } from './rng.js';
+import { sense, tdx, tdy } from './sensors.js';
+import { wrap, capAsteroidSpeed, createAsteroid, collideAsteroids } from './physics.js';
+import { applyEntropyBonus, buildBehavior } from './evaluation.js';
 
 const W = CONFIG.arena.width;
 const H = CONFIG.arena.height;
 const SHIP = CONFIG.ship;
 const BULLET = CONFIG.bullet;
 const AST = CONFIG.asteroid;
-const SENS = CONFIG.sensors;
 const DEG = Math.PI / 180;
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+// Re-export toroidal helpers for any external probe that imported them via game.js
+export { tdx, tdy, wrap };
 
-// Toroidal deltas: shortest displacement on the wrapped arena. All sensing AND
-// collisions use these, so rocks approaching across a seam are seen and hit.
-const tdx = (ax, sx) => { let d = ax - sx; if (d > W / 2) d -= W; else if (d < -W / 2) d += W; return d; };
-const tdy = (ay, sy) => { let d = ay - sy; if (d > H / 2) d -= H; else if (d < -H / 2) d += H; return d; };
-
-function wrap(o) {
-  if (o.x < 0) o.x += W;
-  else if (o.x >= W) o.x -= W;
-  if (o.y < 0) o.y += H;
-  else if (o.y >= H) o.y -= H;
-}
 export class World {
   // brains: array with exactly ONE Network (or null for a no-action probe).
-  constructor(brains) {
+  // Second arg is optional RNG seam: { rng } or direct rng object. Falls back
+  // to the global seeded stream for backward compat.
+  constructor(brains, rngOrOpts = null) {
+    let rng = null;
+    if (rngOrOpts && typeof rngOrOpts.rng === 'function') rng = rngOrOpts;
+    else if (rngOrOpts && rngOrOpts.rng) rng = rngOrOpts.rng;
+    else if (rngOrOpts && typeof rngOrOpts.rand === 'function') rng = rngOrOpts;
+    this.rng = rng ?? defaultRNG;
     this.time = 0;
     this.waveTime = 0;
     this.wave = 0;
@@ -34,9 +33,9 @@ export class World {
     this.fitnessFinalized = false;
     this.agents = Array.from(brains, (brain) => ({
       brain,
-      x: W / 2 + rand(-SHIP.spawnJitter, SHIP.spawnJitter),
-      y: H / 2 + rand(-SHIP.spawnJitter, SHIP.spawnJitter),
-      heading: rand(0, Math.PI * 2),
+      x: W / 2 + this.rng.rand(-SHIP.spawnJitter, SHIP.spawnJitter),
+      y: H / 2 + this.rng.rand(-SHIP.spawnJitter, SHIP.spawnJitter),
+      heading: this.rng.rand(0, Math.PI * 2),
       vx: 0,
       vy: 0,
       alive: true,
@@ -59,32 +58,19 @@ export class World {
     for (let i = 0; i < this.rockCount; i++) {
       let x, y;
       do {
-        x = rand(0, W);
-        y = rand(0, H);
+        x = this.rng.rand(0, W);
+        y = this.rng.rand(0, H);
       } while (
         Math.hypot(tdx(x, ship.x), tdy(y, ship.y)) < AST.initialMinDistFromShip
       );
       const s = AST.sizes.L;
-      this.asteroids.push(this.#makeAsteroid('L', x, y, rand(0, Math.PI * 2), rand(s.minSpeed, s.maxSpeed)));
+      this.asteroids.push(this.#makeAsteroid('L', x, y, this.rng.rand(0, Math.PI * 2), this.rng.rand(s.minSpeed, s.maxSpeed)));
     }
   }
 
   #makeAsteroid(size, x, y, dir, speed) {
-    const s = AST.sizes[size];
-    const shape = [];
-    for (let i = 0; i < AST.vertices; i++) shape.push(rand(AST.jitterMin, AST.jitterMax));
-    return {
-      size, x, y,
-      vx: Math.cos(dir) * speed,
-      vy: Math.sin(dir) * speed,
-      r: s.r,
-      pts: s.pts,
-      shape,
-      angle: rand(0, Math.PI * 2),
-      spin: rand(-AST.spinMax, AST.spinMax),
-    };
+    return createAsteroid(size, x, y, dir, speed, this.rng);
   }
-
 
   #splitAsteroid(i) {
     const a = this.asteroids[i];
@@ -94,122 +80,30 @@ export class World {
     const cs = AST.sizes[child];
     const dir = Math.atan2(a.vy, a.vx);
     for (const sign of [1, -1]) {
-      const d = dir + sign * rand(AST.splitAngleMin, AST.splitAngleMax) * DEG;
-      const impulse = rand(cs.minSpeed, cs.maxSpeed) * AST.splitImpulseFactor;
+      const d = dir + sign * this.rng.rand(AST.splitAngleMin, AST.splitAngleMax) * DEG;
+      const impulse = this.rng.rand(cs.minSpeed, cs.maxSpeed) * AST.splitImpulseFactor;
       const c = this.#makeAsteroid(child, a.x, a.y, d, 0);
       // Momentum inheritance: parent velocity + radial spread impulse, capped.
       c.vx = a.vx + Math.cos(d) * impulse;
       c.vy = a.vy + Math.sin(d) * impulse;
-      this.#capAsteroidSpeed(c);
+      capAsteroidSpeed(c);
       this.asteroids.push(c);
     }
   }
 
   #capAsteroidSpeed(a) {
-    const sp = Math.hypot(a.vx, a.vy);
-    if (sp > AST.speedCap) {
-      a.vx *= AST.speedCap / sp;
-      a.vy *= AST.speedCap / sp;
-    }
+    capAsteroidSpeed(a);
   }
 
-  // Elastic rock-rock collisions: mass ~ r^2, positional de-overlap, skip separating pairs.
+  // Internal seam: elastic rock-rock collisions delegated to physics module.
+  // Exposed via method for backward compat (verify probes World indirectly).
   #collideAsteroids() {
-    const list = this.asteroids;
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const a = list[i];
-        const b = list[j];
-        const dx = tdx(b.x, a.x);
-        const dy = tdy(b.y, a.y);
-        const rr = a.r + b.r;
-        let d2 = dx * dx + dy * dy;
-        if (d2 >= rr * rr || d2 === 0) continue;
-        const d = Math.sqrt(d2);
-        const nx = dx / d;
-        const ny = dy / d;
-        const ma = a.r * a.r;
-        const mb = b.r * b.r;
-        // De-overlap proportionally to inverse mass.
-        const overlap = rr - d;
-        const total = ma + mb;
-        a.x -= nx * overlap * (mb / total);
-        a.y -= ny * overlap * (mb / total);
-        b.x += nx * overlap * (ma / total);
-        b.y += ny * overlap * (ma / total);
-        // Impulse only when approaching.
-        const rvn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-        if (rvn >= 0) continue;
-        const jImp = (-(1 + AST.restitution) * rvn) / (1 / ma + 1 / mb);
-        a.vx -= (jImp / ma) * nx;
-        a.vy -= (jImp / ma) * ny;
-        b.vx += (jImp / mb) * nx;
-        b.vy += (jImp / mb) * ny;
-        this.#capAsteroidSpeed(a);
-        this.#capAsteroidSpeed(b);
-      }
-    }
+    collideAsteroids(this.asteroids);
   }
 
+  // Internal seam: sensing delegated to sensors module.
   #sense(agent) {
-    const inputs = new Array(CONFIG.nn.inputs).fill(0);
-    inputs[11] = 1; // bias
-    inputs[9] = clamp(agent.vx / SENS.velScale, -1, 1);
-    inputs[10] = clamp(agent.vy / SENS.velScale, -1, 1);
-    // Rays: nearest intersection, toroidal arena (rocks across a seam are visible).
-    for (let k = 0; k < SENS.rayOffsetsDeg.length; k++) {
-      const ang = agent.heading + SENS.rayOffsetsDeg[k] * DEG;
-      const dx = Math.cos(ang);
-      const dy = Math.sin(ang);
-      let nearest = Infinity;
-      for (const a of this.asteroids) {
-        const ox = tdx(a.x, agent.x);
-        const oy = tdy(a.y, agent.y);
-        const t = ox * dx + oy * dy;
-        if (t < 0) continue;
-        const perp2 = ox * ox + oy * oy - t * t;
-        const r2 = a.r * a.r;
-        if (perp2 > r2) continue;
-        const d = Math.max(0, t - Math.sqrt(r2 - perp2));
-        if (d < nearest) nearest = d;
-      }
-      inputs[k] = nearest === Infinity ? 0 : clamp(1 - nearest / SENS.range, 0, 1);
-    }
-    // Nearest-threat radar: one toroidal pass over asteroids.
-    let nd2 = Infinity, n2d2 = Infinity, nx = 0, ny = 0, nvx = 0, nvy = 0, nr = 1, pressure = 0;
-    for (const a of this.asteroids) {
-      const dx = tdx(a.x, agent.x);
-      const dy = tdy(a.y, agent.y);
-      const d2 = dx * dx + dy * dy;
-      if (d2 < nd2) {
-        n2d2 = nd2; // old nearest becomes second-nearest
-        nd2 = d2; nx = dx; ny = dy; nvx = a.vx; nvy = a.vy; nr = a.r;
-      } else if (d2 < n2d2) {
-        n2d2 = d2;
-      }
-      pressure += 1 - Math.min(Math.sqrt(d2), SENS.range) / SENS.range;
-    }
-    if (nd2 < Infinity) {
-      const d = Math.sqrt(nd2);
-      let bearing = Math.atan2(ny, nx) - agent.heading;
-      bearing = Math.atan2(Math.sin(bearing), Math.cos(bearing)); // wrap to [-pi, pi]
-      inputs[12] = bearing / Math.PI; // threat bearing, +1 = hard right
-      inputs[13] = clamp(1 - d / SENS.range, 0, 1); // threat closeness
-      const closing = (nx * (nvx - agent.vx) + ny * (nvy - agent.vy)) / d; // d(dist)/dt, <0 = approaching
-      inputs[14] = clamp(closing / SENS.velScale, -1, 1);
-      // Lateral (tangential) relative velocity: which way the threat is crossing our nose.
-      const lateral = (-ny * (nvx - agent.vx) + nx * (nvy - agent.vy)) / d;
-      inputs[16] = clamp(lateral / SENS.velScale, -1, 1);
-      inputs[18] = clamp(nr / AST.sizes.L.r, 0, 1); // threat size: 1 = large, ~0.29 = small
-    }
-    if (n2d2 < Infinity) {
-      inputs[17] = clamp(1 - Math.sqrt(n2d2) / SENS.range, 0, 1); // second-nearest closeness
-    }
-    inputs[19] = clamp(pressure / SENS.pressureNorm, 0, 1); // proximity-weighted encirclement
-    inputs[15] = agent.bulletsOut / BULLET.maxAlivePerShip; // guns state
-    inputs[20] = agent.memory; // learned state fed back from last step's output 25
-    agent.inputs = inputs; // kept for the vision-ray overlay
-    return inputs;
+    return sense(agent, this.asteroids);
   }
 
   step(dt) {
@@ -346,32 +240,14 @@ export class World {
     }
   }
 
-  // Shannon entropy over the 4 action-usage frequencies, normalized to [0,1]:
-  // 1 = uses every control, ~0.6 = sprinkler (2 of 4). Sensorimotor-curiosity
-  // shaping per arXiv:1006.4959 / 2608.12534.
+  // Internal seam: entropy bonus delegated to evaluation module.
   #applyEntropyBonus(agent) {
-    const st = agent.stats;
-    if (st.steps === 0) return;
-    const counts = [st.left, st.right, st.thrust, st.fire];
-    let h = 0;
-    for (const c of counts) {
-      if (c === 0) continue;
-      const p = c / st.steps;
-      h -= p * Math.log(p);
-    }
-    agent.fitness += CONFIG.fitness.actionEntropyBonus * (h / Math.log(4));
+    applyEntropyBonus(agent);
   }
 
   // Normalized behavior descriptor for the novelty archive:
   // [usageL, usageR, usageT, usageF, coverage8x5, meanSpeed/maxSpeed, min(waves,5)/5].
   agentBehavior(agent = this.agents[0]) {
-    const st = agent.stats;
-    const n = Math.max(1, st.steps);
-    return [
-      st.left / n, st.right / n, st.thrust / n, st.fire / n,
-      st.cells.size / 40,
-      st.speedSum / n / SHIP.maxSpeed,
-      Math.min(this.wave, 5) / 5,
-    ];
+    return buildBehavior(agent, this.wave);
   }
 }
