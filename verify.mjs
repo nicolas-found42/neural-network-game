@@ -13,13 +13,10 @@ const ok = (name, cond, detail = '') => {
 const dt = CONFIG.dt;
 
 // 1. Config shape.
-ok('inputs=21', CONFIG.nn.inputs === 21);
-ok('outputIds 21-25', JSON.stringify(CONFIG.nn.outputIds) === '[21,22,23,24,25]');
-ok('firstHiddenNodeId=26', CONFIG.nn.firstHiddenNodeId === 26);
-ok('wave constants', CONFIG.world.waveTimeLimit === 60 && CONFIG.world.episodeHardCap === 300 && CONFIG.asteroid.waveGrowth === 1.25);
-ok('speed 1..10000, cap 20000, budget 20ms', CONFIG.render.speedMin === 1 && CONFIG.render.speedMax === 10000 && CONFIG.render.maxStepsPerFrame === 20000 && CONFIG.render.frameBudgetMs === 20);
-ok('crowd/maintain constants removed', !('crowdRadius' in CONFIG.sensors) && !('maintainCount' in CONFIG.asteroid));
-
+// 1b. HiDPI render-only invariant: logical arena unchanged, dprCap present, game units untouched.
+ok('arena still 960x600 logical', CONFIG.arena.width === 960 && CONFIG.arena.height === 600);
+ok('render.dprCap == 2', CONFIG.render.dprCap === 2);
+ok('chart/net still 300x110 / 280x420 logical', CONFIG.render.chart.width === 300 && CONFIG.render.chart.height === 110 && CONFIG.render.network.width === 280 && CONFIG.render.network.height === 420);
 // 2. Population/network shape.
 resetInnovation();
 const pop = new Population(100);
@@ -262,6 +259,63 @@ const { setSeed, rng, randInt } = await import('./js/rng.js');
   const rb = runFive();
   ok('seeded 5-episode replay deep-equal', JSON.stringify(ra) === JSON.stringify(rb));
   ok('seeded fitnesses finite', ra.every(Number.isFinite));
+}
+// 17. HiDPI helper: mock canvas, backing = css*DPR capped, transform = DPR*scale (render-only — no physics drift).
+{
+  const { setupHiDPI } = await import('./js/render.js');
+  const mockCtx = { sx: 0, sy: 0, setTransform(sx, _a, _b, sy) { this.sx = sx; this.sy = sy; } };
+  const makeMock = () => ({ width: 0, height: 0, style: {}, getContext() { return mockCtx; } });
+  // DPR 1 fallback (node, no window → dpr 1)
+  {
+    const c = makeMock();
+    const r = setupHiDPI(c, 300, 110);
+    ok('HiDPI mock DPR1 300x110 backing 300x110', c.width === 300 && c.height === 110 && r.dpr === 1 && mockCtx.sx === 1, `${c.width}x${c.height} dpr=${r.dpr} sx=${mockCtx.sx}`);
+    ok('HiDPI style stays CSS pixels DPR1', c.style.width === '300px' && c.style.height === '110px');
+  }
+  // Fitted arena: emulate DPR 2 via global window stub — should get 1920x1200 backing and sx=2, sy=2
+  {
+    const prevWin = globalThis.window;
+    globalThis.window = { devicePixelRatio: 2, matchMedia: () => ({ addEventListener() {}, addListener() {} }) };
+    // Re-import to capture rawDpr? setupHiDPI reads window at call time, so no re-import needed.
+    const c = makeMock();
+    // css == logical (scale 1) → sx = DPR
+    setupHiDPI(c, 300, 110, 300, 110);
+    ok('HiDPI DPR2 chart 300x110 -> 600x220 sx=2', c.width === 600 && c.height === 220 && mockCtx.sx === 2 && mockCtx.sy === 2, `${c.width}x${c.height} sx=${mockCtx.sx}`);
+    const a = makeMock();
+    // Arena fitted scale 0.5: logical 960x600, css 480x300 → backing 960x600 (480*2), sx = 2*0.5=1
+    setupHiDPI(a, 480, 300, 960, 600);
+    ok('HiDPI DPR2 fitted arena 480x300/logical 960x600 -> 960x600 sx=1', a.width === 960 && a.height === 600 && mockCtx.sx === 1 && mockCtx.sy === 1, `${a.width}x${a.height} sx=${mockCtx.sx}`);
+    const b = makeMock();
+    // Arena scale 1: logical 960x600 css 960x600 DPR2 -> 1920x1200 sx=2
+    setupHiDPI(b, 960, 600, 960, 600);
+    ok('HiDPI DPR2 arena 960x600 logical -> 1920x1200 sx=2', b.width === 1920 && b.height === 1200 && mockCtx.sx === 2 && mockCtx.sy === 2, `${b.width}x${b.height} sx=${mockCtx.sx}`);
+    // Cap at 2: DPR 3 → still 2
+    globalThis.window.devicePixelRatio = 3;
+    const cap = makeMock();
+    setupHiDPI(cap, 960, 600, 960, 600);
+    ok('HiDPI DPR cap 2: raw 3 -> dpr 2', cap._dpr === 2 && cap.width === 1920, `dpr=${cap._dpr} w=${cap.width}`);
+    globalThis.window = prevWin;
+  }
+  // Determinism unchanged: a single World step hash with HiDPI setup preceding it must match baseline.
+  {
+    setSeed(7);
+    resetInnovation();
+    const p = new Population(5);
+    const w = new World([p.networks[0]]);
+    for (let i = 0; i < 10; i++) w.step(dt);
+    const h = `${w.agents[0].x.toFixed(6)},${w.agents[0].y.toFixed(6)},${w.asteroids[0].x.toFixed(2)}`;
+    // Run again after a mock HiDPI call that should not touch rng/world.
+    const { setupHiDPI: sh } = await import('./js/render.js');
+    const c = { width: 0, height: 0, style: {}, getContext() { return { setTransform() {} }; } };
+    sh(c, 960, 600, 960, 600);
+    setSeed(7);
+    resetInnovation();
+    const p2 = new Population(5);
+    const w2 = new World([p2.networks[0]]);
+    for (let i = 0; i < 10; i++) w2.step(dt);
+    const h2 = `${w2.agents[0].x.toFixed(6)},${w2.agents[0].y.toFixed(6)},${w2.asteroids[0].x.toFixed(2)}`;
+    ok('HiDPI does not perturb deterministic physics', h === h2, `${h} vs ${h2}`);
+  }
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

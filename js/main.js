@@ -4,13 +4,15 @@ import { CONFIG } from './config.js';
 import { World } from './game.js';
 import { Genome, Network, resetInnovation } from './neat.js';
 import { Population, NoveltyArchive } from './population.js';
-import { renderArena, renderOverlay, renderHUD, renderChart, renderNetwork } from './render.js';
+import { renderArena, renderOverlay, renderHUD, renderChart, renderNetwork, setupHiDPI } from './render.js';
 import { setSeed } from './rng.js';
 
 const arena = document.getElementById('arena');
 const hud = document.getElementById('hud');
-const chartCtx = document.getElementById('chart').getContext('2d');
-const netCtx = document.getElementById('net').getContext('2d');
+const chartCanvas = document.getElementById('chart');
+const netCanvas = document.getElementById('net');
+const chartCtx = chartCanvas.getContext('2d');
+const netCtx = netCanvas.getContext('2d');
 const ctx = arena.getContext('2d');
 const btnPause = document.getElementById('btnPause');
 
@@ -78,18 +80,45 @@ let effSim = 0; // sim seconds stepped in the current measurement window
 let effWall = 0; // wall seconds in the current measurement window
 const speedEff = document.getElementById('speedEff');
 
-// CSS-scale arena to fit the window, aspect preserved.
-function fitArena() {
+// Fitted HiDPI layout: arena backing = fitted CSS size * DPR (capped), transform = DPR*scale
+// so drawing in logical 960×600 always fills the backing crisply. Chart/net are fixed.
+let layoutRaf = 0;
+function applyHiDPIAndFit() {
   const wrap = document.getElementById('arenaWrap');
   const scale = Math.min(
     wrap.clientWidth / CONFIG.arena.width,
     wrap.clientHeight / CONFIG.arena.height
   );
-  arena.style.width = Math.floor(CONFIG.arena.width * scale) + 'px';
-  arena.style.height = Math.floor(CONFIG.arena.height * scale) + 'px';
+  const cssW = Math.floor(CONFIG.arena.width * scale);
+  const cssH = Math.floor(CONFIG.arena.height * scale);
+  setupHiDPI(arena, cssW, cssH, CONFIG.arena.width, CONFIG.arena.height);
+  setupHiDPI(chartCanvas, CONFIG.render.chart.width, CONFIG.render.chart.height);
+  setupHiDPI(netCanvas, CONFIG.render.network.width, CONFIG.render.network.height);
 }
-window.addEventListener('resize', fitArena);
-fitArena();
+function scheduleLayout() {
+  if (layoutRaf) return;
+  layoutRaf = requestAnimationFrame(() => {
+    layoutRaf = 0;
+    applyHiDPIAndFit();
+  });
+}
+applyHiDPIAndFit();
+window.addEventListener('resize', scheduleLayout);
+// Re-apply when the display's devicePixelRatio changes (drag between Retina/1×).
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const watchDPR = () => {
+    const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    const onChange = () => {
+      scheduleLayout();
+      if (mq.removeEventListener) mq.removeEventListener('change', onChange);
+      else if (mq.removeListener) mq.removeListener(onChange);
+      setTimeout(watchDPR, 0);
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  };
+  watchDPR();
+}
 function loadBrain(i) {
   brainIdx = i;
   world = new World([showcase ? champNet : pop.networks[i]]);

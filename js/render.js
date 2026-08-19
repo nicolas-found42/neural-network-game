@@ -11,6 +11,39 @@ const stars = Array.from({ length: CONFIG.arena.starCount }, () => ({
   y: Math.random() * H,
   r: 0.5 + Math.random() * 1.2,
 }));
+// HiDPI setup: backing store = cssPixels * DPR (capped), style = cssPixels,
+// context transform maps logical coords to device pixels.
+// For arena: cssW = 960*scale, logicalW = 960 → transform = DPR*scale (fitted).
+// For chart/net: cssW === logicalW → transform = DPR.
+// Headless (no window) falls back to DPR=1 and becomes a no-op for determinism checks.
+export function setupHiDPI(canvas, cssW, cssH, logicalW = cssW, logicalH = cssH) {
+  const rawDpr = typeof window !== 'undefined' && window.devicePixelRatio ? window.devicePixelRatio : 1;
+  const cap = CONFIG.render.dprCap ?? 2;
+  const dpr = Math.min(rawDpr, cap);
+  // Caller floors cssW/cssH (arena fitted); keep floor for backing too.
+  const w = Math.max(1, Math.floor(cssW * dpr));
+  const h = Math.max(1, Math.floor(cssH * dpr));
+  // Setting width/height resets the context state — do it before setTransform.
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+  // Style size is CSS pixels — browser composites backing → style.
+  canvas.style.width = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  // logical → device: device = logical * (css/logical) * dpr
+  const sx = dpr * (cssW / logicalW);
+  const sy = dpr * (cssH / logicalH);
+  // Guard division-by-zero (should never happen, logicalW/H >0)
+  if (Number.isFinite(sx) && Number.isFinite(sy)) ctx.setTransform(sx, 0, 0, sy, 0, 0);
+  // Exposed for tests/debugging.
+  canvas._dpr = dpr;
+  canvas._cssW = cssW;
+  canvas._cssH = cssH;
+  return { dpr, cssW, cssH, w, h };
+}
+
 
 // Classic Asteroids seam behavior: an entity overlapping an arena edge is drawn
 // again on the opposite side (up to 4 copies when straddling a corner).

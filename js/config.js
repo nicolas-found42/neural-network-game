@@ -119,6 +119,7 @@ export const CONFIG = {
 
   render: {
     hudHz: 10,
+    dprCap: 2, // max devicePixelRatio used for HiDPI backing (render-only, keeps game units at 960x600)
     chart: { width: 300, height: 110, bestColor: '#39d0ff', avgColor: '#ffb347', maxGens: 120 },
     network: {
       width: 280, height: 420,
