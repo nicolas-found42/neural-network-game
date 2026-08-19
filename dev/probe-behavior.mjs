@@ -1,8 +1,8 @@
 // Gemba probe: what do the brains ACTUALLY do? Measures action usage per brain.
-const { CONFIG } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/config.js');
-const { World } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/game.js');
-const { resetInnovation } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/neat.js');
-const { Population } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+const { CONFIG } = await import('../js/config.js');
+const { World } = await import('../js/game.js');
+const { resetInnovation } = await import('../js/neat.js');
+const { Population } = await import('../js/population.js');
 
 const TH = CONFIG.nn.actionThreshold;
 const dt = CONFIG.dt;

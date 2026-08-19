@@ -280,4 +280,24 @@ export function renderNetwork(ctx, genome, network) {
     ctx.fill();
     ctx.stroke();
   }
+
+  // --- Labels: action names right of outputs, sensor group tags left of inputs.
+  ctx.font = '9px ' + FONT;
+  ctx.fillStyle = '#7f8ba3';
+  ctx.textAlign = 'left';
+  const outLabels = ['◀', '▶', 'THR', 'FIR', 'MEM'];
+  CONFIG.nn.outputIds.forEach((id, i) => {
+    const P = pos.get(id);
+    if (P) ctx.fillText(outLabels[i], outX + 10, P.y + 3);
+  });
+  const groups = [
+    [0, 'rays'], [9, 'vel'], [11, 'bias'], [12, 'thr'], [15, 'gun'],
+    [16, 'lat'], [17, 't2'], [18, 'sz'], [19, 'prs'], [20, 'mem'],
+  ];
+  ctx.textAlign = 'right';
+  for (const [id, label] of groups) {
+    const P = pos.get(id);
+    if (P) ctx.fillText(label, inX - 10, P.y + 3);
+  }
+  ctx.textAlign = 'left';
 }

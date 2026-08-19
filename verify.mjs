@@ -1,8 +1,9 @@
-// Fresh-process verification harness for v4 (solo eval + Space Hammer steals).
-const { CONFIG } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/config.js');
-const { World } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/game.js');
-const { Genome, Network, resetInnovation } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/neat.js');
-const { Population } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+// Verification harness: solo evaluation, sensors, fitness semantics, NEAT
+// structure, seeded determinism, and champion JSON round-trip.
+const { CONFIG } = await import('./js/config.js');
+const { World } = await import('./js/game.js');
+const { Genome, Network, resetInnovation } = await import('./js/neat.js');
+const { Population } = await import('./js/population.js');
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = '') => {
@@ -143,7 +144,7 @@ const neverFire = { activate: () => [0, 0, 0, 0, 0] };
 
 // 12. Shaping fitness semantics (v5: movement reward, entropy bonus, novelty archive).
 {
-  const { NoveltyArchive } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+  const { NoveltyArchive } = await import('./js/population.js');
   // Movement reward: full-thrust brain vs immobile corner rocks (no early death).
   const mover = { activate: () => [0, 0, 0.9, 0, 0] };
   const wm = new World([mover]);
@@ -186,7 +187,7 @@ const neverFire = { activate: () => [0, 0, 0, 0, 0] };
 }
 
 
-const { setSeed, rng, randInt } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/rng.js');
+const { setSeed, rng, randInt } = await import('./js/rng.js');
 
 // 13. Seeded stream: randInt bounds + same-seed reproducibility.
 {
@@ -240,7 +241,7 @@ const { setSeed, rng, randInt } = await import('/Users/Nicolas/Documents/github/
 // 16. Seeded full repro: population + 5 complete episodes, twice from scratch,
 // must bank identical fitness arrays (novelty path included).
 {
-  const { NoveltyArchive } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+  const { NoveltyArchive } = await import('./js/population.js');
   const runFive = () => {
     setSeed(42);
     resetInnovation();
