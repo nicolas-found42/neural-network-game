@@ -1,6 +1,7 @@
 // Solo asteroid arena: one World evaluates ONE brain at a time (Space-Hammer-style
 // sequential evaluation). The population driver in main.js feeds brains 0..99 in turn.
 import { CONFIG } from './config.js';
+import { rand } from './rng.js';
 
 const W = CONFIG.arena.width;
 const H = CONFIG.arena.height;
@@ -10,7 +11,6 @@ const AST = CONFIG.asteroid;
 const SENS = CONFIG.sensors;
 const DEG = Math.PI / 180;
 
-const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 // Toroidal deltas: shortest displacement on the wrapped arena. All sensing AND
@@ -46,7 +46,7 @@ export class World {
       memory: 0, // learned state: output 25 last step, fed back as input 20
       thrusting: false, // for the flame visual
       inputs: null, // last sensor frame, for the vision-ray overlay
-      stats: { steps: 0, left: 0, right: 0, thrust: 0, fire: 0, speedSum: 0, cells: new Set() },
+      stats: { steps: 0, left: 0, right: 0, thrust: 0, fire: 0, speedSum: 0, cells: new Set(), aliveTime: 0, rockPts: 0 },
     }));
     this.asteroids = [];
     this.rockCount = AST.initialCount;
@@ -275,6 +275,7 @@ export class World {
       wrap(agent);
       agent.fitness += CONFIG.fitness.alivePerSecond * dt;
       agent.fitness += CONFIG.fitness.moveRate * (sp / SHIP.maxSpeed) * dt;
+      agent.stats.aliveTime += dt;
       agent.stats.speedSum += sp;
       agent.stats.cells.add((Math.floor(agent.x / (W / 8)) << 3) | Math.floor(agent.y / (H / 5)));
       for (const a of this.asteroids) {
@@ -309,6 +310,7 @@ export class World {
           this.bullets.splice(bi, 1);
           b.owner.bulletsOut--;
           b.owner.fitness += a.pts;
+          b.owner.stats.rockPts += a.pts;
           this.#splitAsteroid(ai);
           break;
         }

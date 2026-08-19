@@ -185,5 +185,82 @@ const neverFire = { activate: () => [0, 0, 0, 0, 0] };
   ok('solo step < 0.05ms', per < 0.05, String(per));
 }
 
+
+const { setSeed, rng, randInt } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/rng.js');
+
+// 13. Seeded stream: randInt bounds + same-seed reproducibility.
+{
+  setSeed(42);
+  const draws = Array.from({ length: 10000 }, () => randInt(7));
+  ok('randInt(7) in [0,7) over 1e4 draws', draws.every((v) => Number.isInteger(v) && v >= 0 && v < 7));
+  ok('randInt(7) covers all values', new Set(draws).size === 7);
+  const r1 = [rng(), rng(), rng()];
+  setSeed(42);
+  Array.from({ length: 10000 }, () => randInt(7));
+  const r2 = [rng(), rng(), rng()];
+  ok('same seed -> same stream', JSON.stringify(r1) === JSON.stringify(r2));
+  ok('rng() in [0,1)', r1.every((v) => v >= 0 && v < 1));
+}
+
+// 14. Genome JSON round-trip: toJSON -> fromJSON -> Network produces identical
+// activate() outputs; fromJSON throws on wrong input/output node count.
+{
+  resetInnovation();
+  setSeed(1234);
+  const p3 = new Population(20);
+  const g = p3.genomes[0];
+  g.mutateAddNode();
+  g.mutateAddNode();
+  g.mutateAddConnection();
+  const inputs = Array.from({ length: 21 }, (_, i) => Math.sin(i * 1.7));
+  const outA = Network.fromGenome(g).activate(inputs);
+  const g2 = Genome.fromJSON(JSON.parse(JSON.stringify(g.toJSON())));
+  const outB = Network.fromGenome(g2).activate(inputs);
+  ok('round-trip activate identical', JSON.stringify(outA) === JSON.stringify(outB), `${JSON.stringify(outA)} vs ${JSON.stringify(outB)}`);
+  ok('round-trip preserves node/connection counts', g2.nodes.size === g.nodes.size && g2.connections.size === g.connections.size);
+  const bad = { version: 1, nodes: [[0, 'input'], [1, 'input'], [21, 'output']], connections: [] };
+  let threw = false;
+  try { Genome.fromJSON(bad); } catch (e) { threw = true; }
+  ok('fromJSON throws on wrong IO count', threw);
+}
+
+// 15. Gate instrumentation: aliveTime tracks world time; rockPts banks on a hit.
+{
+  const shooter = { activate: () => [0, 0, 0, 1, 0] };
+  const w = new World([shooter]);
+  const a = w.agents[0];
+  a.x = 480; a.y = 300; a.heading = 0; a.vx = 0; a.vy = 0;
+  w.asteroids = [{ x: 540, y: 300, vx: 0, vy: 0, r: 38, pts: 20, size: 'L', shape: [1], angle: 0, spin: 0 }];
+  let steps = 0;
+  while (!w.done && steps < 600) { w.step(dt); steps++; }
+  ok('rockPts > 0 after forced bullet split', a.stats.rockPts > 0, String(a.stats.rockPts));
+  ok('aliveTime tracks world.time', Math.abs(a.stats.aliveTime - w.time) < dt * 2, `${a.stats.aliveTime} vs ${w.time}`);
+}
+
+// 16. Seeded full repro: population + 5 complete episodes, twice from scratch,
+// must bank identical fitness arrays (novelty path included).
+{
+  const { NoveltyArchive } = await import('/Users/Nicolas/Documents/github/neural-network-game/js/population.js');
+  const runFive = () => {
+    setSeed(42);
+    resetInnovation();
+    const p = new Population(100);
+    const arch = new NoveltyArchive();
+    const fit = [];
+    for (let i = 0; i < 5; i++) {
+      const w = new World([p.networks[i]]);
+      let s = 0;
+      while (!w.done && s < 20000) { w.step(dt); s++; }
+      const beh = w.agentBehavior();
+      fit.push(w.agents[0].fitness + arch.bonusFor(p.generation) * arch.novelty(beh));
+      arch.add(beh);
+    }
+    return fit;
+  };
+  const ra = runFive();
+  const rb = runFive();
+  ok('seeded 5-episode replay deep-equal', JSON.stringify(ra) === JSON.stringify(rb));
+  ok('seeded fitnesses finite', ra.every(Number.isFinite));
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

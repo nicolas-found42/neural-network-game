@@ -125,7 +125,7 @@ export function renderOverlay(ctx, text) {
   ctx.textBaseline = 'alphabetic';
 }
 
-export function renderHUD(el, pop, world, brainIdx) {
+export function renderHUD(el, pop, world, brainIdx, info = {}) {
   const agent = world.agents[0];
   const h = pop.history[pop.history.length - 1];
   const best =
@@ -133,11 +133,17 @@ export function renderHUD(el, pop, world, brainIdx) {
       ? `${pop.bestEver.fitness.toFixed(1)} (gen ${pop.bestEver.gen})`
       : '—';
   const last = h ? `${h.best.toFixed(1)} avg ${h.avg.toFixed(1)}` : '—';
-  el.textContent =
+  // innerHTML: the tripped gate segment renders red. Dynamic parts are numbers only.
+  el.innerHTML =
+    (info.showcase ? '<span style="color:#ffb347">SHOWCASE</span> · ' : '') +
     `Gen ${pop.generation} · Brain ${Math.min(brainIdx + 1, pop.size)}/${pop.size}` +
     ` · t ${world.time.toFixed(1)}s · wave ${world.wave + 1}` +
     (agent && agent.alive ? '' : ' · dead') +
-    ` · Best ever ${best} · Last gen best ${last}`;
+    ` · Best ever ${best} · Last gen best ${last}` +
+    ` · seed ${info.seed}` +
+    (info.gateTripped
+      ? ` · <span style="color:#ff5a5a">GATE TRIPPED gen ${info.trippedGen}</span>`
+      : ` · gate ${info.gateCount ?? 0}/15`);
 }
 
 export function renderChart(ctx, pop) {

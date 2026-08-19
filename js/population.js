@@ -1,6 +1,7 @@
 // Population lifecycle: speciation, dynamic delta threshold, stagnation culling, reproduction.
 import { CONFIG } from './config.js';
 import { Genome, Network, genomeDistance } from './neat.js';
+import { rng, randInt } from './rng.js';
 
 const N = CONFIG.neat;
 
@@ -55,7 +56,7 @@ export class NoveltyArchive {
     this.entries.push(behavior);
     if (this.entries.length > CONFIG.fitness.archiveSize) {
       // Random eviction keeps the archive a time-decaying sample of behaviors.
-      this.entries.splice(Math.floor(Math.random() * this.entries.length), 1);
+      this.entries.splice(randInt(this.entries.length), 1);
     }
   }
 
@@ -162,14 +163,14 @@ export class Population {
     // --- Safety fill (rounding / degenerate cases), then exact size.
     const pool = this.species.flatMap((s) => s.survivors);
     while (next.length < this.size && pool.length) {
-      next.push(pool[Math.floor(Math.random() * pool.length)].g.copy());
+      next.push(pool[randInt(pool.length)].g.copy());
     }
     next.length = this.size;
 
     // --- Representatives carried over: random member of each producing species.
     this.species = this.species.filter((s, idx) => s.championCopied || quota[idx] > 0);
     for (const s of this.species) {
-      s.rep = s.members[Math.floor(Math.random() * s.members.length)].g;
+      s.rep = s.members[randInt(s.members.length)].g;
     }
 
     this.genomes = next;
@@ -178,9 +179,9 @@ export class Population {
   }
 
   #offspring(s) {
-    const pick = () => s.survivors[Math.floor(Math.random() * s.survivors.length)];
+    const pick = () => s.survivors[randInt(s.survivors.length)];
     let child;
-    if (Math.random() < N.crossoverRate) {
+    if (rng() < N.crossoverRate) {
       const a = pick();
       const b = pick();
       if (a === b) {
@@ -192,8 +193,8 @@ export class Population {
     } else {
       child = pick().g.copy();
     }
-    if (Math.random() < N.addNodeRate) child.mutateAddNode();
-    if (Math.random() < N.addConnectionRate) child.mutateAddConnection();
+    if (rng() < N.addNodeRate) child.mutateAddNode();
+    if (rng() < N.addConnectionRate) child.mutateAddConnection();
     child.mutateWeights();
     return child;
   }

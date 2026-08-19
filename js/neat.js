@@ -1,17 +1,10 @@
 // NEAT: genomes, structural/weight mutations, shared innovation tracker, feedforward phenotype.
 import { CONFIG } from './config.js';
+import { rand, randn, rng, randInt } from './rng.js';
 
 const N = CONFIG.neat;
 
-const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-const randn = () => {
-  // Box-Muller
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-};
 
 // ---- Innovation tracker: one shared counter; hidden node ids come from the same
 // counter (starting at 16). Persists across generations; reset on Restart.
@@ -71,12 +64,34 @@ export class Genome {
     return g;
   }
 
+  // Champion export: plain arrays so the JSON stays small and diffable.
+  toJSON() {
+    return {
+      version: 1,
+      nodes: [...this.nodes].map(([id, n]) => [id, n.type]),
+      connections: [...this.connections].map(([innov, c]) => [innov, c.in, c.out, c.w, c.enabled]),
+    };
+  }
+
+  static fromJSON(obj) {
+    const g = Genome.blank();
+    for (const [id, type] of obj.nodes) g.nodes.set(id, { type });
+    for (const [innov, inId, outId, w, enabled] of obj.connections) {
+      g.connections.set(innov, { in: inId, out: outId, w, enabled });
+    }
+    const count = (t) => [...g.nodes.values()].filter((n) => n.type === t).length;
+    if (count('input') !== CONFIG.nn.inputs || count('output') !== CONFIG.nn.outputIds.length) {
+      throw new Error('champion: expected 21 inputs / 5 outputs');
+    }
+    return g;
+  }
+
   mutateWeights() {
     for (const c of this.connections.values()) {
-      if (Math.random() < N.weightPerturbRate) {
+      if (rng() < N.weightPerturbRate) {
         c.w = clamp(c.w + randn() * N.weightPerturbSigma, N.weightMin, N.weightMax);
       }
-      if (Math.random() < N.weightReplaceRate) {
+      if (rng() < N.weightReplaceRate) {
         c.w = rand(N.weightReplaceMin, N.weightReplaceMax);
       }
     }
@@ -104,8 +119,8 @@ export class Genome {
     const bPool = ids.filter((id) => this.nodes.get(id).type !== 'input'); // hidden | output
     if (!aPool.length || !bPool.length) return;
     for (let attempt = 0; attempt < N.addConnectionAttempts; attempt++) {
-      const a = aPool[Math.floor(Math.random() * aPool.length)];
-      const b = bPool[Math.floor(Math.random() * bPool.length)];
+      const a = aPool[randInt(aPool.length)];
+      const b = bPool[randInt(bPool.length)];
       if (a === b) continue;
       let connected = false;
       for (const c of this.connections.values()) {
@@ -129,7 +144,7 @@ export class Genome {
   mutateAddNode() {
     const enabled = [...this.connections.values()].filter((c) => c.enabled);
     if (!enabled.length) return;
-    const c = enabled[Math.floor(Math.random() * enabled.length)];
+    const c = enabled[randInt(enabled.length)];
     c.enabled = false;
     const id = newNodeId();
     this.nodes.set(id, { type: 'hidden' });
@@ -158,7 +173,7 @@ export class Genome {
       const cb = b.connections.get(innov);
       if (cb) {
         const pick = equal
-          ? (Math.random() < 0.5 ? ca : cb)
+          ? (rng() < 0.5 ? ca : cb)
           : (aFitter ? ca : cb);
         child.connections.set(innov, { ...pick });
       } else if (aFitter === true || equal) {
