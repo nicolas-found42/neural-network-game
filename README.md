@@ -4,9 +4,7 @@ Neural networks learn to play Asteroids — evolved live in your browser by NEAT
 
 **[Live demo](https://nicolas-found42.github.io/neural-network-game/)**
 
-![Champion ship under evaluation, vision rays on](doc/demo.png)
-
-<sub>Animated GIF deferred (no ffmpeg on the capture machine); static PNG stands in.</sub>
+![Left: unevolved gen-1 brains flailing. Right: evolved champion (gen 29, rays on)](doc/demo.gif)
 
 This is **Neuroevolution of Augmenting Topologies** (NEAT): each ship is driven
 by a small neural network, and the networks themselves evolve — weights mutate,
